@@ -18,7 +18,7 @@ from backend.base.logging import LOGGER
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.conversion import mass_convert
 from backend.implementations.converters import extract_files_from_folder
-from backend.implementations.download_clients import TorrentDownload
+from backend.implementations.download_clients import TorrentDownload, UsenetDownload
 from backend.implementations.file_matching import scan_files
 from backend.implementations.file_processing import mass_process_files
 from backend.implementations.naming import mass_rename
@@ -145,6 +145,41 @@ def move_torrent_to_dest(download: TorrentDownload) -> None:
     final destination, extract files, scan them, rename them.
     """
     if not exists(download.files[0]):
+        return
+
+    move_to_dest(download)
+
+    download.files = extract_files_from_folder(
+        download.files[0],
+        download.volume_id
+    )
+
+    if not download.files:
+        return
+
+    scan_files(
+        download.volume_id,
+        filepath_filter=download.files,
+        update_websocket=True
+    )
+
+    rename_files = Settings().sv.rename_downloaded_files
+    if rename_files:
+        download.files = mass_rename(
+            download.volume_id,
+            filepath_filter=download.files,
+            process_individual_files=False
+        )
+
+    return
+
+
+def move_usenet_to_dest(download: UsenetDownload) -> None:
+    """
+    Move folder/file downloaded via a Usenet client to the final
+    destination, extract files, scan them and rename them.
+    """
+    if not download.files or not exists(download.files[0]):
         return
 
     move_to_dest(download)
@@ -385,4 +420,14 @@ class PostProcessorTorrentsCopy(PostProcessor):
         convert_file,
         set_file_properties,
         reset_file_link
+    ]
+
+
+class PostProcessorUsenet(PostProcessor):
+    actions_success = [
+        remove_from_queue,
+        add_to_history,
+        move_usenet_to_dest,
+        convert_file,
+        set_file_properties
     ]

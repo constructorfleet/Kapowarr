@@ -25,11 +25,13 @@ from backend.base.helpers import CommaList, Singleton, get_subclasses
 from backend.base.logging import LOGGER
 from backend.features.post_processing import (PostProcessor,
                                               PostProcessorTorrentsComplete,
-                                              PostProcessorTorrentsCopy)
+                                              PostProcessorTorrentsCopy,
+                                              PostProcessorUsenet)
 from backend.implementations.blocklist import add_to_blocklist
 from backend.implementations.download_clients import (BaseDirectDownload,
                                                       MegaDownload,
-                                                      TorrentDownload)
+                                                      TorrentDownload,
+                                                      UsenetDownload)
 from backend.implementations.external_clients import ExternalClients
 from backend.implementations.getcomics import GetComicsPage
 from backend.implementations.volumes import Issue
@@ -178,6 +180,53 @@ class DownloadHandler(metaclass=Singleton):
         ws.emit(RemovedFromQueueEvent(download))
         return
 
+    def __run_usenet_download(self, download: UsenetDownload) -> None:
+        """Start a Usenet (NZB) download. Intended to be run in a thread.
+
+        Args:
+            download (UsenetDownload): The usenet download to run.
+                One of the entries in self.queue.
+        """
+        download.run()
+
+        ws = WebSocket()
+        status_event = QueueStatusEvent(download)
+
+        while True:
+            download.update_status()
+            ws.emit(status_event)
+
+            if download.state == DownloadState.CANCELED_STATE:
+                download.remove_from_client(delete_files=True)
+                PostProcessorUsenet.canceled(download)
+                self.queue.remove(download)
+                break
+
+            elif download.state == DownloadState.FAILED_STATE:
+                download.remove_from_client(delete_files=True)
+                PostProcessorUsenet.perm_failed(download)
+                self.queue.remove(download)
+                break
+
+            elif download.state == DownloadState.SHUTDOWN_STATE:
+                break
+
+            elif download.state == DownloadState.IMPORTING_STATE:
+                if self.settings.sv.delete_completed_downloads:
+                    download.remove_from_client(delete_files=False)
+                PostProcessorUsenet.success(download)
+                self.queue.remove(download)
+                break
+
+            else:
+                # Queued or downloading
+                download.sleep_event.wait(
+                    timeout=Constants.TORRENT_UPDATE_INTERVAL
+                )
+
+        ws.emit(RemovedFromQueueEvent(download))
+        return
+
     # region Queue Management
     def _process_queue(self) -> None:
         """
@@ -316,6 +365,15 @@ class DownloadHandler(metaclass=Singleton):
                 download.download_thread = thread
                 thread.start()
 
+            elif isinstance(download, UsenetDownload):
+                thread = Server().get_db_thread(
+                    target=self.__run_usenet_download,
+                    args=(download,),
+                    name=f'UsenetDownloadThread-{download.id}'
+                )
+                download.download_thread = thread
+                thread.start()
+
             WebSocket().emit(AddedToQueueEvent(download))
         return downloads
 
@@ -357,6 +415,8 @@ class DownloadHandler(metaclass=Singleton):
         """
         if link.startswith(Constants.GC_SITE_URL):
             return 'gc'
+        if link.lower().endswith('.nzb'):
+            return 'nzb'
         return None
 
     def link_in_queue(self, link: str) -> bool:
@@ -471,6 +531,31 @@ class DownloadHandler(metaclass=Singleton):
                     f'Unable to extract download links from source; fail_reason="{e.reason.value}"'
                 )
                 return [], e.reason
+
+        elif link_type == 'nzb':
+            covered_issues = None
+            if issue_id is not None:
+                from backend.implementations.volumes import Issue as _Issue
+                try:
+                    covered_issues = _Issue(issue_id).get_data().calculated_issue_number
+                except Exception:
+                    pass
+
+            try:
+                downloads = [UsenetDownload(
+                    download_link=link,
+                    volume_id=volume_id,
+                    covered_issues=covered_issues,
+                    source_type=DownloadSource.USENET,
+                    source_name='Manual',
+                    web_link=None,
+                    web_title=None,
+                    web_sub_title=None,
+                    forced_match=force_match
+                )]
+            except (IssueNotFound, ClientNotWorking) as e:
+                LOGGER.warning(f'Unable to create usenet download: {e}')
+                return [], EnqueuingDownloadFailureReason.LINK_BROKEN
 
         result = self.__prepare_downloads_for_queue(
             downloads,
