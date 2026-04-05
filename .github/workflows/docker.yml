@@ -54,10 +54,16 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ inputs.tag || 'latest' }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=semver,pattern={{version}},enable=${{ github.event_name == 'push' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' }}
             type=sha
+
+      - name: Resolve build args
+        id: build_args
+        run: |
+          echo "python_version=${{ inputs.python_version || '3.13' }}" >> "$GITHUB_OUTPUT"
+          echo "distro=${{ inputs.distro || 'bookworm' }}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -68,7 +74,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            PYTHON=${{ inputs.python_version || '3.13' }}
-            DISTRO=${{ inputs.distro || 'bookworm' }}
+            PYTHON=${{ steps.build_args.outputs.python_version }}
+            DISTRO=${{ steps.build_args.outputs.distro }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
