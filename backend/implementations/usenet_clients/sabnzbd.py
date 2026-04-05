@@ -198,7 +198,7 @@ class SABnzbd(BaseExternalClient):
         params: Dict[str, Any] = {
             'mode':   'addurl',
             'name':   download_link,
-            'cat':    Constants.TORRENT_TAG,
+            'cat':    Constants.NZB_CATEGORY,
             'output': 'json',
             'apikey': self.api_token or '',
         }

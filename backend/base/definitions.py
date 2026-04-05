@@ -131,7 +131,10 @@ class Constants:
     "The interval in seconds between status updates from external clients"
 
     TORRENT_TAG = "kapowarr"
-    "The tag to give to downloads at external clients"
+    "The tag/category to give to torrent downloads at external clients"
+
+    NZB_CATEGORY = "kapowarr"
+    "The category to assign to NZB downloads in Usenet clients"
 
 
 class FileConstants:
